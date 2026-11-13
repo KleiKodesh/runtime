@@ -95,6 +95,40 @@ EPDFText_GetCharToTextMap(FPDF_TEXTPAGE text_page,
                           EPDF_CHAR_MAP_ANCHOR* anchors,
                           int anchors_len);
 
+// EPDF_TEXT_CHAR::flags values.
+#define EPDF_TEXTCHAR_GENERATED (1u << 0)
+#define EPDF_TEXTCHAR_HYPHEN (1u << 1)
+#define EPDF_TEXTCHAR_UNICODE_MAP_ERROR (1u << 2)
+
+// Experimental EmbedPDF Extension API.
+// One text-page character as EPDFText_GetChars reports it: the values of
+// FPDFText_GetCharOrigin, FPDFText_GetLooseCharBox, FPDFText_GetTextObject,
+// FPDFText_GetUnicode and FPDFText_GetFontSize for that character, and its
+// FPDFText_IsGenerated / FPDFText_IsHyphen /
+// FPDFText_HasUnicodeMapError answers as EPDF_TEXTCHAR_* flags.
+// |text_object| is the FPDF_PAGEOBJECT handle widened to 64 bits (0 when the
+// character has none), so the layout is the same on every platform.
+typedef struct EPDF_TEXT_CHAR_ {
+  double origin_x;
+  double origin_y;
+  uint64_t text_object;
+  FS_RECTF loose_box;
+  uint32_t unicode;
+  uint32_t flags;
+  double font_size;
+} EPDF_TEXT_CHAR;
+
+// Experimental EmbedPDF Extension API.
+// Read characters |start| .. |start| + |count| - 1 of |text_page| into
+// |chars| in one call (the per-character FPDFText_* getters, batched).
+// The range is clipped to the page's characters. Returns the number of
+// entries written, or -1 for an invalid |text_page|, a null |chars| with a
+// non-zero |count|, or a negative |start| or |count|.
+FPDF_EXPORT int FPDF_CALLCONV EPDFText_GetChars(FPDF_TEXTPAGE text_page,
+                                                int start,
+                                                int count,
+                                                EPDF_TEXT_CHAR* chars);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

@@ -541,3 +541,54 @@ TEST_F(EPDFTextEmbedderTest, EPDFTextFullAndMapInvalidArgs) {
   EXPECT_EQ(0, EPDFText_GetTextFull(nullptr, nullptr, 0));
   EXPECT_EQ(-1, EPDFText_GetCharToTextMap(nullptr, nullptr, 0));
 }
+
+TEST_F(EPDFTextEmbedderTest, GetChars) {
+  ASSERT_TRUE(OpenDocument("hello_world.pdf"));
+  ScopedPage page = LoadScopedPage(0);
+  ASSERT_TRUE(page);
+
+  ScopedFPDFTextPage text_page(FPDFText_LoadPage(page.get()));
+  ASSERT_TRUE(text_page);
+  const int count = FPDFText_CountChars(text_page.get());
+  ASSERT_GT(count, 2);
+
+  std::vector<EPDF_TEXT_CHAR> chars(count + 2);
+  EXPECT_EQ(-1, EPDFText_GetChars(nullptr, 0, 1, chars.data()));
+  EXPECT_EQ(-1, EPDFText_GetChars(text_page.get(), -1, 1, chars.data()));
+  EXPECT_EQ(-1, EPDFText_GetChars(text_page.get(), 0, -1, chars.data()));
+  EXPECT_EQ(-1, EPDFText_GetChars(text_page.get(), 0, 1, nullptr));
+  EXPECT_EQ(0, EPDFText_GetChars(text_page.get(), 0, 0, nullptr));
+  EXPECT_EQ(0, EPDFText_GetChars(text_page.get(), count, 1, chars.data()));
+
+  // Clipped to the page's characters.
+  ASSERT_EQ(count,
+            EPDFText_GetChars(text_page.get(), 0, count + 2, chars.data()));
+  for (int i = 0; i < count; ++i) {
+    const EPDF_TEXT_CHAR& c = chars[i];
+    EXPECT_EQ(FPDFText_GetUnicode(text_page.get(), i), c.unicode);
+    double x = 0;
+    double y = 0;
+    ASSERT_TRUE(FPDFText_GetCharOrigin(text_page.get(), i, &x, &y));
+    EXPECT_EQ(x, c.origin_x);
+    EXPECT_EQ(y, c.origin_y);
+    FS_RECTF box = {};
+    ASSERT_TRUE(FPDFText_GetLooseCharBox(text_page.get(), i, &box));
+    EXPECT_EQ(box.left, c.loose_box.left);
+    EXPECT_EQ(box.top, c.loose_box.top);
+    EXPECT_EQ(box.right, c.loose_box.right);
+    EXPECT_EQ(box.bottom, c.loose_box.bottom);
+    EXPECT_EQ(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(
+                  FPDFText_GetTextObject(text_page.get(), i))),
+              c.text_object);
+    EXPECT_EQ(FPDFText_GetFontSize(text_page.get(), i), c.font_size);
+    EXPECT_EQ(FPDFText_IsGenerated(text_page.get(), i) == 1,
+              (c.flags & EPDF_TEXTCHAR_GENERATED) != 0);
+    EXPECT_EQ(FPDFText_IsHyphen(text_page.get(), i) == 1,
+              (c.flags & EPDF_TEXTCHAR_HYPHEN) != 0);
+  }
+
+  // A window starting mid-page.
+  ASSERT_EQ(2, EPDFText_GetChars(text_page.get(), 1, 2, chars.data()));
+  EXPECT_EQ(FPDFText_GetUnicode(text_page.get(), 1), chars[0].unicode);
+  EXPECT_EQ(FPDFText_GetUnicode(text_page.get(), 2), chars[1].unicode);
+}
