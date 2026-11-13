@@ -657,6 +657,7 @@ int CheckEmbedPDFCApi(void) {
   // epdf_text.h
   CHK(EPDFText_GetCharGeometry);
   CHK(EPDFText_GetCharToTextMap);
+  CHK(EPDFText_GetChars);
   CHK(EPDFText_GetTextFull);
 
   // epdf_view.h

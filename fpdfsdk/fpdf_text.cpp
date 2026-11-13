@@ -47,6 +47,15 @@ static_assert(offsetof(EPDF_CHAR_MAP_ANCHOR, text_offset) == 4);
 static_assert(offsetof(EPDF_CHAR_GEOMETRY, matrix) == 96);
 static_assert(offsetof(EPDF_CHAR_GEOMETRY, flags) == 120);
 
+static_assert(sizeof(EPDF_TEXT_CHAR) == 56);
+static_assert(offsetof(EPDF_TEXT_CHAR, origin_x) == 0);
+static_assert(offsetof(EPDF_TEXT_CHAR, origin_y) == 8);
+static_assert(offsetof(EPDF_TEXT_CHAR, text_object) == 16);
+static_assert(offsetof(EPDF_TEXT_CHAR, loose_box) == 24);
+static_assert(offsetof(EPDF_TEXT_CHAR, unicode) == 40);
+static_assert(offsetof(EPDF_TEXT_CHAR, flags) == 44);
+static_assert(offsetof(EPDF_TEXT_CHAR, font_size) == 48);
+
 constexpr float kUprightTolerance = 1e-4f;
 constexpr float kSingularTolerance = 1e-6f;
 
@@ -531,6 +540,53 @@ FPDFText_GetCharOrigin(FPDF_TEXTPAGE text_page,
   *x = charinfo.origin().x;
   *y = charinfo.origin().y;
   return true;
+}
+
+// EmbedPDF(epdf-api): EPDFText_GetChars, the per-character getters batched.
+FPDF_EXPORT int FPDF_CALLCONV EPDFText_GetChars(FPDF_TEXTPAGE text_page,
+                                                int start,
+                                                int count,
+                                                EPDF_TEXT_CHAR* chars) {
+  CPDF_TextPage* textpage = CPDFTextPageFromFPDFTextPage(text_page);
+  if (!textpage || start < 0 || count < 0 || (count > 0 && !chars)) {
+    return -1;
+  }
+  const int total = textpage->CountChars();
+  if (start >= total) {
+    return 0;
+  }
+  const int end = start + std::min(count, total - start);
+  // SAFETY: the caller provides |count| entries; at most |count| are written.
+  auto out_span = UNSAFE_BUFFERS(
+      pdfium::span(chars, static_cast<size_t>(end - start)));
+  for (int index = start; index < end; ++index) {
+    const CPDF_TextPage::CharInfo& charinfo = textpage->GetCharInfo(index);
+    EPDF_TEXT_CHAR& out = out_span[index - start];
+    out.origin_x = charinfo.origin().x;
+    out.origin_y = charinfo.origin().y;
+    out.text_object = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(
+        FPDFPageObjectFromCPDFPageObject(charinfo.text_object())));
+    out.loose_box =
+        FSRectFFromCFXFloatRect(textpage->GetCharLooseBounds(index));
+    out.unicode = charinfo.unicode();
+    uint32_t flags = 0;
+    switch (charinfo.char_type()) {
+      case CPDF_TextPage::CharType::kGenerated:
+        flags |= EPDF_TEXTCHAR_GENERATED;
+        break;
+      case CPDF_TextPage::CharType::kHyphen:
+        flags |= EPDF_TEXTCHAR_HYPHEN;
+        break;
+      case CPDF_TextPage::CharType::kNotUnicode:
+        flags |= EPDF_TEXTCHAR_UNICODE_MAP_ERROR;
+        break;
+      default:
+        break;
+    }
+    out.flags = flags;
+    out.font_size = textpage->GetCharFontSize(index);
+  }
+  return end - start;
 }
 
 FPDF_EXPORT int FPDF_CALLCONV
