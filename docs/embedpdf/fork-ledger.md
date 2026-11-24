@@ -236,13 +236,21 @@ neither is secret: the `/Perms` filler bytes (encrypted under the file key) and 
 ### faithful-content-rewrite
 **Rule.** Regenerating a page's or form's content writes back what the parser read: colour spaces
 by their names, the matrix a form's content starts at, soft-mask matrices, Type3 glyphs, `TJ`
-arrays, a form XObject's own resource names.
+arrays, a form XObject's own resource names. A change to existing content writes every stream
+again, and each stands alone (`q ... Q`, no `cm` outside it): where the content was cut into
+streams makes no difference.
 **Why.** Redaction and editing rewrite content, and anything the writer drops shows up far from the
-edit (embedpdf/runtime#58, #59).
+edit (embedpdf/runtime#58, #59). Upstream writes only the streams that changed and gives each next
+stream its CTM with a `cm` whose matrix product is the wrong way round. On a page cut into streams
+inside `q ... cm ... Q`, as "Microsoft: Print To PDF" writes them, a redaction moved everything
+from the third stream on.
 **Where.** `CPDF_PageContentGenerator`, `CPDF_PageContentManager`, `CPDF_StreamContentParser`,
-`CPDF_ColorState`, `CPDF_Type3Font`.
-**Guarded by.** `epdf_content_rewrite_embeddertest.cpp`, `cpdf_contentnames_unittest.cpp`.
+`CPDF_ColorState`, `CPDF_Type3Font`, `CPDF_PageObjectHolder::ForgetStreamCTMs`.
+**Guarded by.** `epdf_content_rewrite_embeddertest.cpp` (`WhereContentIsCutIntoStreamsChangesNothing`
+runs every case page again with its content cut into streams), `cpdf_contentnames_unittest.cpp`.
 **When upstream touches this.** The content generator, and what the parser records about state.
+The fork never reaches upstream's `cm` between streams: a pass appends a stream or writes them all.
+If upstream corrects or moves it, a rewrite of every stream still forgets the stream CTMs first.
 
 ### redaction
 **Rule.** Redaction removes text, paths, images and marked content under its regions, and draws
@@ -345,11 +353,12 @@ accept it in the report.
 ## Text
 
 ### text-geometry
-**Rule.** Text pages expose each character's geometry (loose and tight boxes, quads, matrix), and
-text markup reads oriented quads.
-**Why.** Selection and markup on rotated and skewed text.
-**Where.** `CPDF_TextPage`, `fpdf_text.cpp`, `EPDFText_GetCharGeometry`, quad reading in
-`cpdf_annot.cpp`.
+**Rule.** Text pages expose each character's geometry (loose and tight boxes, quads, matrix), one
+character at a time or a range of characters in one call, and text markup reads oriented quads.
+**Why.** Selection and markup on rotated and skewed text. A call per character costs more than the
+geometry itself once it crosses into JavaScript, so a range of characters also comes in one call.
+**Where.** `CPDF_TextPage`, `fpdf_text.cpp`, `EPDFText_GetCharGeometry`,
+`EPDFText_GetPageGeometry`, quad reading in `cpdf_annot.cpp`.
 **Guarded by.** `epdf_text_bounds_embeddertest.cpp`, the text embedder tests.
 **When upstream touches this.** `CPDF_TextPage` character processing.
 
@@ -441,10 +450,11 @@ a field breaks its lines where upstream's would. Keep `font_index_` declared aft
 **When upstream touches this.** Annotation drawing.
 
 ### signatures
-**Rule.** Revisions, signature reading and signing support.
-**Why.** Digital signatures.
-**Where.** `epdf_signature.cpp`, `epdf_revision_*` (ours), hooks in the parser and creator.
-**Guarded by.** `epdf_signature_embeddertest.cpp`.
+**Rule.** Revisions, signature reading and signing support, and the document security store.
+**Why.** Digital signatures, and keeping them checkable for years.
+**Where.** `epdf_signature.cpp`, `epdf_revision_*`, `epdf_dss.cpp` (ours), hooks in the parser and
+creator.
+**Guarded by.** `epdf_signature_embeddertest.cpp`, `epdf_dss_embeddertest.cpp`.
 **When upstream touches this.** Parser revision handling and the creator.
 
 ### embed-metadata
@@ -478,10 +488,12 @@ taking upstream's side without putting `EPDF_TLS` back, on the variable renamed 
 
 ### per-thread-init
 **Rule.** Library start-up runs once per thread. A process-wide value it writes must be
-thread-local, or identical on every thread and on the allowlist.
-**Why.** `EPDF_InitThread` calls `FPDF_InitLibrary` on every worker thread.
+thread-local, or identical on every thread and on the allowlist. `EPDF_InitThread` and
+`EPDF_ShutdownThread` are counted per thread: the last `EPDF_ShutdownThread` tears PDFium down.
+**Why.** `EPDF_InitThread` calls `FPDF_InitLibrary` on every worker thread. Two runtimes on one
+thread (two engines in a Node thread) share its PDFium, and each calls the pair.
 **Where.** `fpdf_view.cpp` (`FPDF_InitLibrary`), `epdf_threading.cpp`.
-**Guarded by.** The thread soak.
+**Guarded by.** The thread soak; `EPDFViewEmbedderTest.ThreadLifecycleIsCounted`.
 **When upstream touches this.** Anything new in `FPDF_InitLibraryWithConfig` or
 `FPDF_DestroyLibrary`.
 
@@ -534,10 +546,11 @@ component builds; don't bring back the empty `#else` branch.
 **Why.** It was put there when the API was added.
 **Where.** The implementations still in `fpdf_view.cpp`, `fpdf_doc.cpp`, `fpdf_attachment.cpp`,
 `fpdf_save.cpp` and `fpdf_text.cpp`; the two colour types `public/fpdf_annot.h` adds for
-`public/epdf_annot.h`; core helpers such as `CPDF_Dest::GetPageObjectNumber`. Every declaration we
-added to a public header now lives in our own: `public/epdf_<name>.h` next to upstream's
-`public/fpdf_<name>.h` (`epdf_view.h` and `epdf_layer.h` for `fpdfview.h`), and the annotation API
-in `fpdfsdk/epdf_annot.cpp`.
+`public/epdf_annot.h`; core helpers such as `CPDF_Dest::GetPageObjectNumber` and
+`CPDF_AnnotContext::CreateOwningPage` (a `*Raw` annotation handle keeps its page, and closing the
+handle frees it). Every declaration we added to a public header now lives in our own:
+`public/epdf_<name>.h` next to upstream's `public/fpdf_<name>.h` (`epdf_view.h` and `epdf_layer.h`
+for `fpdfview.h`), and the annotation API in `fpdfsdk/epdf_annot.cpp`.
 **Guarded by.** The embedder tests of each API. `epdf.CApiTest` (`fpdfsdk/epdf_c_api_test.c`) takes
 every `EPDF*` function's address from C, so each header compiles as C and each declaration links;
 `check-c-api.py` keeps its list complete.

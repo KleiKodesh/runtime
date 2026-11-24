@@ -448,6 +448,9 @@ FPDFPage_CreateAnnot(FPDF_PAGE page, FPDF_ANNOTATION_SUBTYPE subtype) {
 
   RetainPtr<CPDF_Array> pAnnotList = pPage->GetOrCreateAnnotsArray();
   pAnnotList->Append(dict);
+  // ISO 32000-1:2008 spec, table 30: /Annots entries are indirect references.
+  pAnnotList->ConvertToIndirectObjectAt(pAnnotList->size() - 1,
+                                        pPage->GetDocument());
 
   // Caller takes ownership.
   return FPDFAnnotationFromCPDFAnnotContext(pNewAnnot.release());
@@ -1338,8 +1341,10 @@ FPDFAnnot_GetLinkedAnnot(FPDF_ANNOTATION annot, FPDF_BYTESTRING key) {
     return nullptr;
   }
 
-  auto pLinkedAnnot = std::make_unique<CPDF_AnnotContext>(
-      std::move(pLinkedDict), pAnnot->GetPage());
+  // EmbedPDF(epdf-api): on |annot|'s page, sharing that page when |annot| owns
+  // it (a *Raw handle), so either handle can be closed first.
+  std::unique_ptr<CPDF_AnnotContext> pLinkedAnnot =
+      pAnnot->CreateLinked(std::move(pLinkedDict));
 
   // Caller takes ownership.
   return FPDFAnnotationFromCPDFAnnotContext(pLinkedAnnot.release());
