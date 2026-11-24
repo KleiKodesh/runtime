@@ -314,20 +314,6 @@ static_assert(static_cast<int>(CPDF_Annot::ReplyType::kGroup) ==
                   FPDF_ANNOT_RT_GROUP,
               "ReplyType::kGroup mismatch");
 
-class RawAnnotContext final : public CPDF_AnnotContext {
- public:
-  // Takes ownership of |unparsed_page| by value (RetainPtr).
-  RawAnnotContext(RetainPtr<CPDF_Dictionary> dict,
-                  RetainPtr<CPDF_Page> unparsed_page,
-                  int annot_index)
-      : CPDF_AnnotContext(dict, unparsed_page.Get(), annot_index),
-        owned_page_(std::move(unparsed_page)) {}
-
- private:
-  // Keeps the page alive as long as the annot context lives.
-  const RetainPtr<CPDF_Page> owned_page_;
-};
-
 // Checks if an annotation subtype can have a /Name entry.
 bool IsNameSubtype(FPDF_ANNOTATION_SUBTYPE subtype) {
   return subtype == FPDF_ANNOT_TEXT || subtype == FPDF_ANNOT_FILEATTACHMENT ||
@@ -2821,16 +2807,13 @@ EPDFPage_GetAnnotRaw(FPDF_DOCUMENT doc, int page_index, int index) {
     return nullptr;
   }
 
-  // Use the standard MakeRetain to create the page object.
-  // This works because of the CONSTRUCT_VIA_MAKE_RETAIN macro in cpdf_page.h.
+  // Built from the dictionary alone: its content is never parsed. The handle
+  // keeps the page, and closing the handle frees it.
   auto page = pdfium::MakeRetain<CPDF_Page>(pdf, page_dict);
-
-  // Create the context, which now takes the RetainPtr directly.
-  auto ctx = std::make_unique<RawAnnotContext>(std::move(annot_dict),
-                                               std::move(page), index);
-
-  // The lifetime is now perfectly managed by smart pointers.
-  return FPDFAnnotationFromCPDFAnnotContext(ctx.release());
+  return FPDFAnnotationFromCPDFAnnotContext(
+      CPDF_AnnotContext::CreateOwningPage(std::move(annot_dict),
+                                          std::move(page), index)
+          .release());
 }
 
 FPDF_EXPORT FPDF_ANNOTATION FPDF_CALLCONV
@@ -2855,7 +2838,8 @@ EPDFPage_CreateAnnotRaw(FPDF_DOCUMENT doc,
   if (!CPDF_Document::IsPageTreeLeaf(page_dict.Get())) {
     return nullptr;
   }
-  // Built from the dictionary alone: its content is never parsed.
+  // Built from the dictionary alone: its content is never parsed. The handle
+  // keeps the page, and closing the handle frees it.
   auto page = pdfium::MakeRetain<CPDF_Page>(pdf, page_dict);
 
   RetainPtr<CPDF_Dictionary> dict =
@@ -2876,9 +2860,10 @@ EPDFPage_CreateAnnotRaw(FPDF_DOCUMENT doc,
   annots->AppendNew<CPDF_Reference>(pdf, dict->GetObjNum());
   const int index = fxcrt::CollectionSize<int>(*annots) - 1;
 
-  auto ctx =
-      std::make_unique<RawAnnotContext>(std::move(dict), std::move(page), index);
-  return FPDFAnnotationFromCPDFAnnotContext(ctx.release());
+  return FPDFAnnotationFromCPDFAnnotContext(
+      CPDF_AnnotContext::CreateOwningPage(std::move(dict), std::move(page),
+                                          index)
+          .release());
 }
 
 FPDF_EXPORT FPDF_BOOL FPDF_CALLCONV EPDFPage_RemoveAnnotRaw(FPDF_DOCUMENT doc,
@@ -2987,22 +2972,31 @@ EPDFAnnot_GetName(FPDF_ANNOTATION annot, char* buffer, unsigned long buflen) {
       name_str, UNSAFE_BUFFERS(SpanFromFPDFApiArgs(buffer, buflen)));
 }
 
-// Where a stamp's drawing is placed: its unrotated box and the rotation, when
-// /EMBD_Metadata records both, else /Rect.
+// Where a drawing is placed: the box it is fitted into, before any turn, and
+// the turn about that box's middle. A stamp's are the ones /EMBD_Metadata
+// records, else /Rect unturned, and /Rect is written to stand around them. A
+// widget's follow from /Rect and /MK /R, the entries every PDF app reads, so
+// placing a drawing in a widget never writes /Rect.
 struct PlacementBox {
   CFX_FloatRect rect;
   bool rotated = false;
   float degrees = 0;
+  bool writes_rect = true;
 };
 
 static PlacementBox ReadPlacementBox(const CPDF_Dictionary* annot_dict) {
-  const std::optional<fpdfdoc::AnnotRotation> recorded =
-      fpdfdoc::GetRecordedAnnotRotation(annot_dict);
+  const bool widget =
+      CPDF_Annot::StringToAnnotSubtype(annot_dict->GetNameFor(
+          pdfium::annotation::kSubtype)) == CPDF_Annot::Subtype::WIDGET;
+  const std::optional<fpdfdoc::AnnotRotation> turn =
+      widget ? fpdfdoc::GetWidgetAnnotRotation(annot_dict)
+             : fpdfdoc::GetRecordedAnnotRotation(annot_dict);
   PlacementBox box;
-  box.rotated = recorded.has_value();
-  box.degrees = recorded ? recorded->degrees : 0;
-  box.rect = recorded ? recorded->box
-                      : annot_dict->GetRectFor(pdfium::annotation::kRect);
+  box.rotated = turn.has_value();
+  box.degrees = turn ? turn->degrees : 0;
+  box.rect =
+      turn ? turn->box : annot_dict->GetRectFor(pdfium::annotation::kRect);
+  box.writes_rect = !widget;
   return box;
 }
 
@@ -3076,10 +3070,7 @@ static bool PlaceWrapper(CPDF_AnnotContext* ctx,
   // too: /Rect places it on the page, and a form around the wrapper (our
   // opacity layer, or another editor's) then needs no matrix of its own.
   if (box.rotated) {
-    const float theta = box.degrees * 3.14159265358979323846f / 180.0f;
-    const float cos_t = cosf(theta);
-    const float sin_t = sinf(theta);
-    CFX_Matrix rotation(cos_t, sin_t, -sin_t, cos_t, 0, 0);
+    CFX_Matrix rotation = fpdfdoc::TurnAbout(CFX_PointF(), box.degrees);
     CFX_FloatRect turned =
         rotation.TransformRect(CFX_FloatRect(0, 0, box_w, box_h));
     turned.Normalize();
@@ -3087,13 +3078,15 @@ static bool PlaceWrapper(CPDF_AnnotContext* ctx,
     ap_dict->SetMatrixFor("Matrix", rotation);
     // /Rect is the upright box around the turned drawing, about the box's
     // middle: it places the appearance at scale 1, where any other would
-    // stretch it.
-    const CFX_PointF center = fpdfdoc::BoxCenter(box.rect);
-    ad->SetRectFor(pdfium::annotation::kRect,
-                   CFX_FloatRect(center.x - turned.Width() / 2,
-                                 center.y - turned.Height() / 2,
-                                 center.x + turned.Width() / 2,
-                                 center.y + turned.Height() / 2));
+    // stretch it. A widget's box came from its /Rect, which stays.
+    if (box.writes_rect) {
+      const CFX_PointF center = fpdfdoc::BoxCenter(box.rect);
+      ad->SetRectFor(pdfium::annotation::kRect,
+                     CFX_FloatRect(center.x - turned.Width() / 2,
+                                   center.y - turned.Height() / 2,
+                                   center.x + turned.Width() / 2,
+                                   center.y + turned.Height() / 2));
+    }
   } else {
     ap_dict->RemoveFor("Matrix");
   }
@@ -3177,9 +3170,10 @@ static bool RefitPlacedAppearance(FPDF_ANNOTATION annot,
   }
 
   // Otherwise the current appearance is the drawing to wrap. Turned by our
-  // keys, it is the form another app drew it in, without the matrices that
-  // turn and place that form (a stamp Acrobat turned): our wrapper places and
-  // turns it now, as it takes over the stretch onto /Rect.
+  // keys, or by a widget's /MK /R, it is the form another app drew it in,
+  // without the matrices that turn and place that form (a stamp Acrobat
+  // turned): our wrapper places and turns it now, as it takes over the
+  // stretch onto /Rect.
   if (content_rect.IsEmpty()) {
     if (box.rotated) {
       ap = ToStream(EpdfFindDrawnForm(ap.Get(), painted_opacity).form->Clone());
