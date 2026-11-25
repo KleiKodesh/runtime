@@ -617,7 +617,7 @@ FPDF_EXPORT int FPDF_CALLCONV EPDFText_GetChars(FPDF_TEXTPAGE text_page,
   auto out_span = UNSAFE_BUFFERS(
       pdfium::span(chars, static_cast<size_t>(end - start)));
   for (int index = start; index < end; ++index) {
-    const CPDF_TextPage::CharInfo& charinfo = textpage->GetCharInfo(index);
+    CPDF_TextPage::CharInfo& charinfo = textpage->GetCharInfo(index);
     EPDF_TEXT_CHAR& out = out_span[index - start];
     out.origin_x = charinfo.origin().x;
     out.origin_y = charinfo.origin().y;
