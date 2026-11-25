@@ -336,19 +336,59 @@ matrix.
 `cpdf_appearancegenerator_<family>.cpp` per family and what they share in
 `cpdf_appearancegenerator_internal.h`). None of our code calls upstream's `CPDF_GenerateAP`, and
 upstream's `core/fpdfdoc/cpdf_generateap.{h,cpp}` stay byte-identical to upstream, compiled and
-unused.
+unused. An annotation's border is read in one place, `fpdfdoc::ReadAnnotBorder`, as ISO 32000-1
+12.5.2 says: its `/BS`, and then `/Border` is not read at all; or else its `/Border`; or else solid
+and 1 wide. Every drawer takes its border from that reading, and the `EPDFAnnot_*` border readers
+report it. A border setter that changes the border leaves it in a `/BS` of the annotation's own:
+a `/Border` is moved into it and removed, and a `/BS` or a `/D` that is an indirect object, which
+another annotation may name too, is never written into. A setter that asks for what the border
+already states writes nothing, so a `/Border` stays as it is, with the corner radii a `/BS`
+cannot hold; a malformed border that only reads as the values is written anew.
 **Why.** We rewrote most of the generator: appearances built in memory, rich text, rotation,
 measurement, redaction overlays, form fields. Mixed into upstream's file, it was the worst conflict
-file. Apart, upstream's file merges cleanly.
+file. Apart, upstream's file merges cleanly. With one reading of a border, an annotation is drawn
+with the border the API reads for it, whichever key holds it.
 **Where.** `cpdf_appearancegenerator*` and its unit test; the calls in `cpdf_annot.cpp`,
 upstream's `FPDFAnnot_AppendObject` and `FPDFAnnot_SetFontColor` in `fpdf_annot.cpp`,
-`epdf_annot.cpp`, `epdf_form.cpp`, `epdf_redact.cpp` and the rich text writer.
+`epdf_annot.cpp`, `epdf_form.cpp`, `epdf_redact.cpp` and the rich text writer. A push button's
+icon (`/MK /I`) is drawn in every layout that shows one. Alone (`/MK /TP 1`, an image field, and
+any layout 2 to 6 without a caption) `GenerateIconButtonAP` draws it. With the caption (`/MK /TP`
+2 to 6) `GeneratePushButtonFormAP` draws both, and shares the button between them by the rule of
+upstream's form filler (`SplitButton`, after `GetPushButtonAppStream` in
+`fpdfsdk/cpdfsdk_appstream.cpp`, which stays unchanged), so a button looks the same whichever drew
+it. The engine writes layouts 0 and 1 only, a caption or an image field, so layouts 2 to 6 are
+met only in buttons other apps made. Either way the icon fit (`/MK /IF`) is read through
+upstream's `CPDF_IconFit` and the icon is placed by our own `IconPlacement`, by ISO 32000-2 Table
+250: upstream's own placement (`CPDF_IconFit::GetScale` and `GetImageOffset`, used by its form
+filler) puts an icon whose fit names no `/A` at the bottom left, where the table's default is the
+middle, and reads an icon narrower than one unit as one unit wide. A push button's appearance is
+a new stream on every redraw, as a check box's are: the stream it had may be another widget's or
+a picture the button showed, so it is never written into, and the icon its resources named goes
+with it. Before a form drawer replaces an appearance, a widget whose `/AP` is an indirect object
+gets a copy of its own (`OwnAppearanceDict`), and `epdf_annot.cpp` does the same for `/MK` and
+`/BS` before a setter writes one (`OwnMKForWriting` and `BorderStyleDictForWrite`, both through
+`OwnDictEntry`): another annotation may name the same dictionary. A colour is
+set as a new array, never written into the one the entry named, which may be an object another
+`/MK` names too. An `/MK` setter that changes nothing writes nothing, and it changes nothing only
+when the entry is well formed and reads as the value (three numbers from 0 to 1, a string, an
+integer): a malformed entry that reads the same is written anew. An icon is a form XObject
+everywhere (`ButtonIconOf`, `MKIconForm`). The border: `cpdf_annot_border.{h,cpp}`, its drawers'
+view of it in `cpdf_appearancegenerator_common.cpp` (`GetAnnotBorderStyleInfo`, `GetBorderWidth`,
+`GetDashPatternString`), and `ReadStatedBorder` and `BorderStyleDictForWrite` in `epdf_annot.cpp`.
 **Guarded by.** `check-fork-tags.py` fails when upstream's files differ from upstream
 (`fork-pristine.txt`); `upstream-preview.py` lists new upstream callers of `CPDF_GenerateAP::`, and
-upstream's commits to its generator.
+upstream's commits to its generator. `epdf_widget_drawing_embeddertest.cpp` for a button's icon;
+its `AButtonIsSharedAsTheFormFillerSharesIt` runs upstream's form filler on the same buttons and
+compares the two. `CPDFGenerateAPTest.BorderArrayDrawsAsBorderStyleForEveryKind` draws every kind
+that has a border from both keys; the border setters' tests are in `epdf_annot_embeddertest.cpp`
+(`ABorderCallThatChangesNothingWritesNothing`, `ASharedBorderStyleIsNotWrittenInto`).
 **When upstream touches this.** A commit to `cpdf_generateap.*`: port it to ours or skip it, with
 the reason in the sync report. A new upstream caller of `CPDF_GenerateAP::`: route it to ours, or
-accept it in the report.
+accept it in the report. A change to what `CPDF_IconFit`'s readers return (`GetScaleMethod`,
+`IsProportionalScale`, `GetIconBottomLeftPosition`, `GetFittingBounds`): `IconPlacement` reads the
+file through them. A change to how `GetPushButtonAppStream` shares a button: `SplitButton`
+follows it, and the comparing test fails until it does. A drawer ported from upstream reads `/BS`
+alone, as upstream's form fields do: give it our reading, and a row in that test.
 
 ## Text
 
@@ -376,11 +416,21 @@ calls FreeType.
 
 ### annot-appearance
 **Rule.** Our appearance model: appearance states, box kinds drawn in a frame they measure, dashes,
-note icons, canonical stamp drawings, widget rendering, and the hooks into our appearance
-generator.
-**Why.** Annotations look the same in every viewer and survive edits.
-**Where.** `cpdf_annot.cpp`, `cpdf_annotlist.cpp`, `cpdf_annotcontext.cpp`.
-**Guarded by.** `epdf_appearance_state_embeddertest.cpp`, the annotation embedder tests.
+note icons, canonical drawings, widget rendering, and the hooks into our appearance generator. A
+drawing is a picture the document holds once: a form XObject, known by the digest of its canonical
+bytes. A stamp's artwork and a mark in a widget each place it with a wrapper of their own, and a
+push button's `/MK` names it as an icon, so one drawing serves all three. A drawing is never
+written after it is made: placing one only reads it.
+**Why.** Annotations look the same in every viewer and survive edits. A picture shown in many
+places is in the file once, and a place added after a signature leaves the drawing the signature
+covers as it was.
+**Where.** `cpdf_annot.cpp`, `cpdf_annotlist.cpp`, `cpdf_annotcontext.cpp`; the drawing calls in
+`epdf_annot.cpp` (`EPDFDoc_CanonicalDrawing`, `EPDFDoc_ImportDrawing`, `EPDFDoc_ExportDrawing`,
+`EPDFDoc_GetDrawings`, `EPDFAnnot_SetDrawing`, `EPDFAnnot_GetDrawing`, `EPDFAnnot_SetMKIcon`,
+`EPDFAnnot_GetMKIcon`) and the wrapper in `epdf_wrapped_appearance.{h,cpp}`.
+**Guarded by.** `epdf_appearance_state_embeddertest.cpp`, the annotation embedder tests,
+`epdf_widget_drawing_embeddertest.cpp`, and
+`EPDFSignatureEmbedderTest.PlacingADrawingAgainLeavesTheSignedRevisionAlone`.
 **When upstream touches this.** Annotation drawing and appearance lookup.
 
 ### forms-model
@@ -417,7 +467,8 @@ selective flattening.
 ### fonts
 **Rule.** Registered fonts, fallbacks, subsetting, CID-keyed CFF and font embedding policies. A
 standard font (the 14, on an ANSI code page) draws with PDFium's built-in face on every platform,
-never a system font.
+never a system font. A character the substitute for a font the document does not hold lacks is
+drawn in the registered fallback font that has it, at the widths the document gives.
 **Why.** Text the user types must render and embed with the right font, and a document must draw
 the same in every engine, WebAssembly (which has no system fonts) included.
 **Where.** `cfx_fontregistry` (ours), `cpdf_font*`, `cfx_fontmapper.cpp`. Upstream's embedder tests
@@ -432,6 +483,7 @@ which the rich text layout breaks a field's lines with; and `CFX_Face::LoadUnsca
 and `GetMappedCodePointRanges`, defined in our `cfx_glyphoutline.cpp` and `cfx_codepointrange.cpp`.
 **Guarded by.** The font embedder tests; `cfx_fontmapper_unittest.cpp` and
 `EPDFViewEmbedderTest.StandardFontsDrawWithBuiltInFaces` for standard fonts;
+`EPDFAnnotEmbedderTest.RegisteredFallbackFont*` for the page's own text;
 `epdf_font_embeddertest.cpp` and `epdf_richtextlayout_embeddertest.cpp` (`FieldMatchesCpvt` for
 the line breaks) for a document's fonts and the layout.
 **When upstream touches this.** Font loading and mapping. A new upstream test that expects the test
@@ -439,7 +491,9 @@ fonts for a standard font passes as it is; one of ours that expects the built-in
 switch off. Our font code calls FreeType directly (`CFX_Face::GetFsTypeFlags()`, CID-keyed CFF,
 the registry), so our builds keep `pdf_enable_freetype` on; a Fontations-only build would need
 Skrifa versions of them. When upstream changes CPVT's word breaking, the layout follows on purpose:
-a field breaks its lines where upstream's would. Keep `font_index_` declared after
+a field breaks its lines where upstream's would. A registered fallback font has no
+`CFX_SubstFont`, so code that reads one from a font `GetFontFallback()` returns must allow for
+null. Keep `font_index_` declared after
 `epdf_attachment_` in `CPDF_Document`, so the index goes before the attachment and the parser.
 
 ### measurement

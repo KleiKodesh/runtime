@@ -92,6 +92,7 @@ int CheckEmbedPDFCApi(void) {
   CHK(EPDFAnnot_ClearEmbedMetadata);
   CHK(EPDFAnnot_ClearEmbedMetadataKey);
   CHK(EPDFAnnot_ClearMKColor);
+  CHK(EPDFAnnot_ClearMKIcon);
   CHK(EPDFAnnot_ClearRectangleDifferences);
   CHK(EPDFAnnot_ExportAppearance);
   CHK(EPDFAnnot_GenerateAppearance);
@@ -115,6 +116,7 @@ int CheckEmbedPDFCApi(void) {
   CHK(EPDFAnnot_GetDefaultAppearance);
   CHK(EPDFAnnot_GetDefaultAppearanceFontFace);
   CHK(EPDFAnnot_GetDefaultAppearanceFontPostScriptName);
+  CHK(EPDFAnnot_GetDrawing);
   CHK(EPDFAnnot_GetDrawingRect);
   CHK(EPDFAnnot_GetEmbedMetadataBoolean);
   CHK(EPDFAnnot_GetEmbedMetadataJSON);
@@ -125,6 +127,7 @@ int CheckEmbedPDFCApi(void) {
   CHK(EPDFAnnot_GetIntent);
   CHK(EPDFAnnot_GetLineEndings);
   CHK(EPDFAnnot_GetMKColor);
+  CHK(EPDFAnnot_GetMKIcon);
   CHK(EPDFAnnot_GetMKRotation);
   CHK(EPDFAnnot_GetMKText);
   CHK(EPDFAnnot_GetMKTextPosition);
@@ -139,11 +142,11 @@ int CheckEmbedPDFCApi(void) {
   CHK(EPDFAnnot_GetRichContent);
   CHK(EPDFAnnot_GetRichTextJSON);
   CHK(EPDFAnnot_GetRotate);
-  CHK(EPDFAnnot_GetStampDrawing);
   CHK(EPDFAnnot_GetStructurePosition);
   CHK(EPDFAnnot_GetTextAlignment);
   CHK(EPDFAnnot_HasAppearanceStream);
   CHK(EPDFAnnot_HasEmbedMetadata);
+  CHK(EPDFAnnot_HasMKIcon);
   CHK(EPDFAnnot_IsValid);
   CHK(EPDFAnnot_RemoveAction);
   CHK(EPDFAnnot_RemoveDest);
@@ -160,6 +163,7 @@ int CheckEmbedPDFCApi(void) {
   CHK(EPDFAnnot_SetDefaultAppearance);
   CHK(EPDFAnnot_SetDefaultAppearanceDocumentFont);
   CHK(EPDFAnnot_SetDefaultAppearanceRegisteredFont);
+  CHK(EPDFAnnot_SetDrawing);
   CHK(EPDFAnnot_SetEmbedMetadataBoolean);
   CHK(EPDFAnnot_SetEmbedMetadataJSON);
   CHK(EPDFAnnot_SetEmbedMetadataNumber);
@@ -170,6 +174,7 @@ int CheckEmbedPDFCApi(void) {
   CHK(EPDFAnnot_SetLineEndings);
   CHK(EPDFAnnot_SetLinkedAnnot);
   CHK(EPDFAnnot_SetMKColor);
+  CHK(EPDFAnnot_SetMKIcon);
   CHK(EPDFAnnot_SetMKRotation);
   CHK(EPDFAnnot_SetMKText);
   CHK(EPDFAnnot_SetMKTextPosition);
@@ -184,7 +189,6 @@ int CheckEmbedPDFCApi(void) {
   CHK(EPDFAnnot_SetRichTextJSON);
   CHK(EPDFAnnot_SetRichTextXHTML);
   CHK(EPDFAnnot_SetRotate);
-  CHK(EPDFAnnot_SetStampDrawing);
   CHK(EPDFAnnot_SetStampOpacity);
   CHK(EPDFAnnot_SetSubtype);
   CHK(EPDFAnnot_SetTextAlignment);
@@ -192,7 +196,7 @@ int CheckEmbedPDFCApi(void) {
   CHK(EPDFAnnot_UpdateAppearanceToRect);
   CHK(EPDFDoc_CanonicalDrawing);
   CHK(EPDFDoc_ExportDrawing);
-  CHK(EPDFDoc_GetStampDrawings);
+  CHK(EPDFDoc_GetDrawings);
   CHK(EPDFDoc_GetTypographicFeatures);
   CHK(EPDFDoc_ImportDrawing);
   CHK(EPDFDoc_SetTypographicFeatures);
